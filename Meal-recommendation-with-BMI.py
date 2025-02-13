@@ -1,139 +1,150 @@
-import streamlit as st # type: ignore
-import pandas as pd # type: ignore
-import numpy as np # type: ignore
-from sklearn.metrics.pairwise import cosine_similarity # type: ignore
-from sklearn.neighbors import NearestNeighbors # type: ignore
-from scipy.stats import pearsonr # type: ignore
+import streamlit as st 
+import pandas as pd 
+import numpy as np 
+from sklearn.metrics.pairwise import cosine_similarity 
+from sklearn.preprocessing import MinMaxScaler
 
 # Load data
-st.header("Please Load your dataset")
+st.header("🍕 Meal Recommendation System 🍔")
 uploaded_file = st.file_uploader("Choose a file")
+
+def calculate_calorie_needs(weight, height, age, gender):
+    # Calculate BMR using Mifflin-St Jeor Equation without activity multiplier
+    if gender == "Male":
+        bmr = 10 * weight + 6.25 * height - 5 * age + 5
+    else:
+        bmr = 10 * weight + 6.25 * height - 5 * age - 161
+    
+    return bmr
+
 if uploaded_file is not None:
     try:
         df = pd.read_csv(uploaded_file, on_bad_lines='skip', delimiter=',')
 
-        # Preprocessing for content-based filtering
-        df['calories_from_protein'] = df['protien'] * 4
-        df['calories_from_fat'] = df['totalfat'] * 9
-        df['calories_from_carbs'] = (df['carbs'] - df['sugar'] - df['addedsugar']) * 4
+        # Preprocessing for nutrition-based filtering
         df['calories'] = df['calories'].astype(float)
         df['protien'] = df['protien'].astype(float)
         df['totalfat'] = df['totalfat'].astype(float)
         df['carbs'] = df['carbs'].astype(float)
         df['sugar'] = df['sugar'].astype(float)
         df['addedsugar'] = df['addedsugar'].astype(float)
-        df['total_calories'] = df['calories']
-        df['protien_percentage'] = (df['calories_from_protein'] / df['total_calories']) * 100
-        df['fat_percentage'] = (df['calories_from_fat'] / df['total_calories']) * 100
-        df['carbs_percentage'] = (df['calories_from_carbs'] / df['total_calories']) * 100
 
-        # Function to create meal feature vector
-        def create_meal_feature_vector(row):
-            c = row['calories']
-            p = row['protien']
-            t = row['totalfat']
-            ca = row['carbs']
-            meal_feature_vector = [c, p, t, ca]
-            return meal_feature_vector
+        # Create normalized feature matrix for better comparison
+        features_for_scaling = ['calories', 'protien', 'totalfat', 'carbs']
+        scaler = MinMaxScaler()
+        df_scaled = pd.DataFrame(scaler.fit_transform(df[features_for_scaling]), 
+                               columns=features_for_scaling)
 
-        # Preparing data for content-based filtering
-        meal_feature_vectors = df.apply(create_meal_feature_vector, axis=1)
-        meal_feature_matrix = np.array(meal_feature_vectors.tolist())
+        def get_recommendations(target_nutrients, num_recommendations=10):
+            """
+            Get meal recommendations based on target nutritional values
+            target_nutrients: dict containing target values for calories, protein, fat, and carbs
+            """
+            # Create target vector
+            target_vector = np.array([
+                target_nutrients['calories'],
+                target_nutrients['protein'],
+                target_nutrients['fat'],
+                target_nutrients['carbs']
+            ]).reshape(1, -1)
+            
+            # Scale target vector using the same scaler
+            target_vector_scaled = scaler.transform(target_vector)
+            
+            # Calculate similarity scores
+            similarities = cosine_similarity(target_vector_scaled, df_scaled)
+            
+            # Get top recommendations
+            top_indices = similarities[0].argsort()[::-1][:num_recommendations]
+            return df.iloc[top_indices]
 
-        # Function for content-based filtering
-        def content_based_filtering(user_preference_vector, meal_feature_matrix, num_recommendations=10, k=5):
-            # Handling potential zero division error
-            if sum(user_preference_vector) == 0:
-                return [], []
-
-            # Cosine similarity
-            similarity_scores = cosine_similarity([user_preference_vector], meal_feature_matrix)
-            sorted_indices = np.argsort(similarity_scores)[0][::-1]
-            top_meal_indices_cosine = sorted_indices[:num_recommendations]
-
-            # Pearson correlation
-            pearson_scores = []
-            for feature_vector in meal_feature_matrix:
-                if np.std(feature_vector) == 0 or np.std(user_preference_vector) == 0:
-                    pearson_scores.append(0)  # Handle constant input array
-                else:
-                    pearson_scores.append(pearsonr(user_preference_vector, feature_vector)[0])
-            sorted_indices_pearson = sorted(range(len(pearson_scores)), key=lambda i: pearson_scores[i], reverse=True)
-            top_indices_pearson = sorted_indices_pearson[:k]
-
-            # Get top recommendations from both methods
-            top_meal_indices_pearson = [df.index[i] for i in top_indices_pearson]
-
-            # Return recommendations
-            return top_meal_indices_cosine, top_meal_indices_pearson
-
-        # Function for collaborative-based filtering
-        def collaborative_filtering(target_rating_value, df, k=10):
-            ratings = df['Ratings'].values.reshape(-1, 1)
-            knn_model = NearestNeighbors(n_neighbors=k, metric='euclidean')
-            knn_model.fit(ratings)
-            target_rating = [[target_rating_value]]
-            distances, indices = knn_model.kneighbors(target_rating)
-            nearest_neighbors = df.iloc[indices[0]]
-            return nearest_neighbors[['item', 'Ratings']]
-
-        # Main function
         def main():
-            st.sidebar.header("BMI Calculator")
-            weight = st.sidebar.number_input("Enter your weight (kg):", min_value=0.0)
-            height = st.sidebar.number_input("Enter your height (cm):", min_value=0.0)
+            st.sidebar.header("Personal Information")
+            
+            # Get user information
+            weight = st.sidebar.number_input("Weight (kg):", min_value=0.0)
+            height = st.sidebar.number_input("Height (cm):", min_value=0.0)
+            age = st.sidebar.number_input("Age:", min_value=0, max_value=120)
+            gender = st.sidebar.selectbox("Gender:", ["Male", "Female"])
 
             if weight > 0 and height > 0:
                 bmi = weight / ((height / 100) ** 2)
-                st.sidebar.write(f"Your BMI is: {bmi:.2f}")
+                base_calories = calculate_calorie_needs(weight, height, age, gender)
+                
+                st.sidebar.subheader("Health Metrics")
+                st.sidebar.write(f"Your BMI: {bmi:.2f}")
+                st.sidebar.write(f"Base Calorie Needs: {base_calories:.0f}")
+
+                # Display BMI category and nutrition guidelines
                 if bmi < 18.5:
-                    st.sidebar.write("You are underweight.")
+                    st.sidebar.warning("BMI Category: Underweight")
+                    default_calories = base_calories * 1.2
+                    default_protein = 2.0  # g/kg bodyweight
                 elif 18.5 <= bmi < 24.9:
-                    st.sidebar.write("You have a normal weight.")
+                    st.sidebar.success("BMI Category: Normal Weight")
+                    default_calories = base_calories
+                    default_protein = 1.6
                 elif 25 <= bmi < 29.9:
-                    st.sidebar.write("You are overweight.")
+                    st.sidebar.warning("BMI Category: Overweight")
+                    default_calories = base_calories * 0.85
+                    default_protein = 1.8
                 else:
-                    st.sidebar.write("You are obese.")
+                    st.sidebar.error("BMI Category: Obese")
+                    default_calories = base_calories * 0.7
+                    default_protein = 2.0
 
-            option = st.sidebar.selectbox("Choose an option", ["Health Conscious", "Tasty Foods"])
-
-            if option == "Health Conscious":
-                st.subheader("Healthy Meals")
-                calorie_requirement = st.number_input("Enter your daily calorie requirement", min_value=0.0)
+                st.subheader("Customize Your Nutritional Preferences")
                 
-                if calorie_requirement == 0:
-                    st.warning("Your daily calorie requirement please")
-                    return
-
-                protein_ratio = st.number_input("Percentage of calories from protein", min_value=0.0, max_value=100.0)
-                fat_ratio = st.number_input("Percentage of calories from fat", min_value=0.0, max_value=100.0)
-                carbohydrate_ratio = st.number_input("Percentage of calories from carbohydrates", min_value=0.0, max_value=100.0)
-                user_preference_vector = [calorie_requirement, protein_ratio, fat_ratio, carbohydrate_ratio]
-                user_preference_vector = [value / sum(user_preference_vector) for value in user_preference_vector]
-
-                # Get recommendations
-                top_meal_indices_cosine, top_meal_indices_pearson = content_based_filtering(user_preference_vector, meal_feature_matrix)
+                # Allow users to customize their nutritional targets
+                target_calories = st.slider("Target Calories per Meal:", 
+                                         int(default_calories * 0.2), 
+                                         int(default_calories * 0.5), 
+                                         int(default_calories * 0.33))
                 
-                # Convert indices to item names
-                recommended_meals_cosine = [df.iloc[i]['item'] for i in top_meal_indices_cosine]
-                recommended_meals_pearson = [df.iloc[i]['item'] for i in top_meal_indices_pearson]
+                target_protein = st.slider("Target Protein (g):", 
+                                        10, 
+                                        100, 
+                                        int(weight * default_protein / 4))
+                
+                target_fat = st.slider("Target Fat (g):", 
+                                     5, 
+                                     50, 
+                                     int((target_calories * 0.3) / 9))
+                
+                target_carbs = st.slider("Target Carbs (g):", 
+                                       20, 
+                                       150, 
+                                       int((target_calories * 0.45) / 4))
 
-                # Find common recommendations
-                common_recommendations = list(set(recommended_meals_cosine) & set(recommended_meals_pearson))
+                if st.button("Get Recommendations"):
+                    target_nutrients = {
+                        'calories': target_calories,
+                        'protein': target_protein,
+                        'fat': target_fat,
+                        'carbs': target_carbs
+                    }
+                    
+                    recommendations = get_recommendations(target_nutrients)
+                    
+                    if len(recommendations) > 0:
+                        st.write("### Recommended Meals")
+                        st.write("Meals are sorted by how well they match your nutritional targets:")
+                        
+                        for idx, row in recommendations.iterrows():
+                            col1, col2 = st.columns([3, 2])
+                            with col1:
+                                st.write(f"**{row['item']}**")
+                                st.write(f"Calories: {row['calories']:.0f} kcal")
+                            with col2:
+                                st.write(f"Protein: {row['protien']:.1f}g")
+                                st.write(f"Fat: {row['totalfat']:.1f}g")
+                                st.write(f"Carbs: {row['carbs']:.1f}g")
+                            st.divider()
+                    else:
+                        st.warning("No suitable recommendations found. Try adjusting your preferences.")
 
-                if len(common_recommendations)==0:
-                    st.write("No common recommendations found.")
-                else:
-                    st.subheader("Top Recommended Meals (Health Conscious):")
-                    for i, meal in enumerate(common_recommendations):
-                        st.write(f"{i + 1}. {meal}")
-
-            elif option == "Tasty Foods":
-                st.subheader("Delicious Meals")
-                target_rating_value = st.number_input("Enter the rating of food you desire", min_value=1.0, max_value=20.0)
-                recommended_meals = collaborative_filtering(target_rating_value, df)
-                st.subheader("Top Recommended Meals (Tasty Foods):")
-                st.write(recommended_meals)
+            else:
+                st.warning("Please enter your weight and height to get personalized recommendations.")
 
         if __name__ == "__main__":
             main()
@@ -141,4 +152,4 @@ if uploaded_file is not None:
     except Exception as e:
         st.error(f"Error: {e}")
 else:
-    st.info("Please upload a CSV file.")
+    st.info("Please upload a CSV file to start getting recommendations.")
