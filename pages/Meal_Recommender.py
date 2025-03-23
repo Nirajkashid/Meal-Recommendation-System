@@ -136,6 +136,21 @@ def collaborative_filtering(user_preferences, content_recs, num_recs, bmi):
 
     return df.loc[top_indices]
 
+
+with open('style1.css') as f:
+    css = f.read()
+st.markdown(f'<style>{css}</style>', unsafe_allow_html=True)
+
+st.title("Personalized Meal Recommendations")
+
+col_nav1, col_nav2, col_nav3 = st.columns([1, 1, 1])
+with col_nav1:
+    if st.button("← Home", use_container_width=True):
+        switch_page("HomePage")
+with col_nav3:
+    if st.button("Visualizations →", use_container_width=True):
+        switch_page("Visualizations")
+
 def show_radar_chart(selected_meals):
     categories = ['calories', 'protien', 'totalfat', 'carbs']
     fig = go.Figure()
