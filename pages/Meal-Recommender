@@ -1,0 +1,218 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+import plotly.graph_objects as go
+from fpdf import FPDF
+import io
+import random
+
+st.set_page_config(page_title="Dynamic Meal Recommender", layout="wide")
+
+# Sample CSV dataset (replace with your CSV load if needed)
+CSV_CONTENT = """item id,item,servesize,calories,protien,totalfat,satfat,transfat,cholestrol,carbs,sugar,addedsugar,sodium,menu,Ratings
+0,McVeggie Burger,168 ,402,10.24,13.83,5.34,0.16,2.49,56.54,7.9,4.49,706.13,regular,1
+1,McAloo Tikki Burger,146 ,339,8.5,11.31,4.27,0.2,1.47,5.27,7.05,4.07,545.34,regular,15
+2,McSpicy Paneer Burger,199 ,652,20.29,39.45,17.12,0.18,21.85,52.33,8.35,5.27,1074.58,regular,19
+"""  # Truncated for brevity. Replace with full data.
+
+# Load dataset
+@st.cache_data
+def load_data():
+    df = pd.read_csv(io.StringIO(CSV_CONTENT), on_bad_lines='skip', delimiter=',')
+    df['calories'] = df['calories'].astype(float)
+    df['protien'] = df['protien'].astype(float)
+    df['totalfat'] = df['totalfat'].astype(float)
+    df['carbs'] = df['carbs'].astype(float)
+    return df
+
+df = load_data()
+
+# Generate fake user preferences for collaborative filtering
+def generate_user_preferences(df):
+    np.random.seed(42)
+    num_users = 100
+    user_preferences = pd.DataFrame(index=range(num_users), columns=df.index)
+    for user in range(num_users):
+        for meal in np.random.choice(df.index, size=int(0.2 * len(df)), replace=False):
+            user_preferences.loc[user, meal] = np.random.randint(1, 6)
+    return user_preferences.fillna(0)
+
+user_preferences = generate_user_preferences(df)
+
+def calculate_bmi(weight, height):
+    if height == 0:
+        return 0
+    return weight / ((height / 100) ** 2)
+
+def content_based_recommendations(bmi, df):
+    df_norm = df.copy()
+    for feature in ['calories', 'protien', 'totalfat', 'carbs']:
+        df_norm[feature] = (df_norm[feature] - df_norm[feature].min()) / (df_norm[feature].max() - df_norm[feature].min())
+
+    features = df_norm[['calories', 'protien', 'totalfat', 'carbs']].values
+
+    calorie_weight = np.clip(1 - (bmi / 40), 0, 1) + np.random.uniform(-0.05, 0.05)
+    protein_weight = np.clip((bmi / 40), 0, 1) + np.random.uniform(-0.05, 0.05)
+    fat_weight = np.clip(1 - abs(22 - bmi) / 40, 0, 1) + np.random.uniform(-0.05, 0.05)
+    carbs_weight = np.clip(1 - (bmi / 40), 0, 1) + np.random.uniform(-0.05, 0.05)
+
+    user_profile = [round(w, 2) for w in [calorie_weight, protein_weight, fat_weight, carbs_weight]]
+    profile_sum = sum(user_profile)
+    user_profile = [round(w / profile_sum, 2) for w in user_profile]
+
+    calorie_mean = df['calories'].mean()
+    calorie_std = df['calories'].std()
+
+    if bmi < 18.5:
+        filtered = df[df['calories'] >= calorie_mean + (bmi / 18.5) * calorie_std]
+        recommendation_type = f"High-Calorie, High-Protein Meals (BMI {bmi:.1f})"
+        num_recommendations = 6
+    elif bmi < 25:
+        filtered = df[
+            (df['calories'] >= calorie_mean - (bmi - 18.5) * calorie_std / 2) &
+            (df['calories'] <= calorie_mean + (25 - bmi) * calorie_std / 2)
+        ]
+        recommendation_type = f"Balanced Meals (BMI {bmi:.1f})"
+        num_recommendations = 4
+    else:
+        filtered = df[df['calories'] <= calorie_mean - (bmi - 25) * calorie_std / 2]
+        recommendation_type = f"Low-Calorie, High-Protein Meals (BMI {bmi:.1f})"
+        num_recommendations = 3
+
+    filtered = filtered.sample(frac=1, random_state=int(bmi * 100))
+
+    similarities = cosine_similarity([user_profile], features)
+    indices = filtered.index.tolist()
+    similarity_scores = [(i, similarities[0][i]) for i in indices]
+    similarity_scores = sorted(similarity_scores, key=lambda x: x[1], reverse=True)
+
+    top_indices = [i[0] for i in similarity_scores[:num_recommendations]]
+
+    return filtered.loc[top_indices], recommendation_type, num_recommendations
+
+def collaborative_filtering(user_preferences, content_recs, num_recs, bmi):
+    cb_indices = content_recs.index.tolist()
+    current_user = pd.Series(0, index=user_preferences.columns)
+    current_user[cb_indices] = 5
+
+    bmi_noise = np.random.normal(loc=bmi / 40, scale=0.1, size=len(current_user))
+    current_user = current_user + bmi_noise
+
+    user_similarities = cosine_similarity([current_user.values], user_preferences.values)[0]
+    similar_users = user_preferences.iloc[np.argsort(user_similarities)[-10:]]
+
+    collaborative_recs = pd.Series(0, index=user_preferences.columns)
+    for _, user in similar_users.iterrows():
+        collaborative_recs += user
+
+    collaborative_recs[cb_indices] = 0
+    collaborative_recs = collaborative_recs.sample(frac=1, random_state=int(bmi * 200))
+
+    top_indices = collaborative_recs.nlargest(num_recs).index.tolist()
+
+    return df.loc[top_indices]
+
+def show_radar_chart(selected_meals):
+    categories = ['calories', 'protien', 'totalfat', 'carbs']
+    fig = go.Figure()
+
+    for _, meal in selected_meals.iterrows():
+        fig.add_trace(go.Scatterpolar(
+            r=[meal['calories'], meal['protien'], meal['totalfat'], meal['carbs']],
+            theta=categories,
+            fill='toself',
+            name=meal['item']
+        ))
+
+    fig.update_layout(polar=dict(radialaxis=dict(visible=True)), showlegend=True)
+    st.plotly_chart(fig, use_container_width=True)
+
+def generate_diet_plan_pdf(user_name, bmi, content_recs, collab_recs):
+    pdf = FPDF()
+    pdf.add_page()
+
+    pdf.set_font("Arial", size=16)
+    pdf.cell(200, 10, txt=f"{user_name}'s Personalized Diet Plan", ln=True, align='C')
+
+    pdf.set_font("Arial", size=12)
+    pdf.ln(10)
+    pdf.cell(200, 10, txt=f"BMI: {bmi:.1f}", ln=True)
+
+    pdf.ln(10)
+    pdf.set_font("Arial", size=14)
+    pdf.cell(200, 10, txt="Content-Based Recommendations", ln=True)
+
+    pdf.set_font("Arial", size=12)
+    for _, row in content_recs.iterrows():
+        pdf.multi_cell(0, 10, txt=f"- {row['item']} (Calories: {row['calories']}, Protein: {row['protien']}g)")
+
+    pdf.ln(10)
+    pdf.set_font("Arial", size=14)
+    pdf.cell(200, 10, txt="Collaborative Recommendations", ln=True)
+
+    pdf.set_font("Arial", size=12)
+    for _, row in collab_recs.iterrows():
+        pdf.multi_cell(0, 10, txt=f"- {row['item']} (Calories: {row['calories']}, Protein: {row['protien']}g)")
+
+    file_name = f"{user_name}_diet_plan.pdf"
+    pdf.output(file_name)
+    return file_name
+
+# --- Streamlit App Layout ---
+st.title("Dynamic BMI Meal Recommender 🍔🥗")
+
+col1, col2 = st.columns(2)
+with col1:
+    weight = st.number_input("Enter your weight (kg)", min_value=0.0, max_value=200.0, value=70.0)
+with col2:
+    height = st.number_input("Enter your height (cm)", min_value=0.0, max_value=250.0, value=170.0)
+
+bmi = calculate_bmi(weight, height)
+st.subheader(f"Your BMI: {bmi:.1f}")
+
+if bmi < 18.5:
+    st.warning("You are underweight.")
+elif bmi < 25:
+    st.success("You have a normal weight.")
+else:
+    st.error("You are overweight.")
+
+if 'rec_history' not in st.session_state:
+    st.session_state.rec_history = []
+
+if st.button("Generate Meal Recommendations"):
+    content_recs, rec_type, num_recs = content_based_recommendations(bmi, df)
+    collab_recs = collaborative_filtering(user_preferences, content_recs, num_recs, bmi)
+
+    st.session_state.rec_history.append({
+        'bmi': bmi,
+        'recommendations': content_recs['item'].tolist()
+    })
+
+    st.header(rec_type)
+    st.dataframe(content_recs[['item', 'calories', 'protien', 'carbs', 'totalfat']])
+
+    st.subheader("You Might Also Like (Collaborative Recs)")
+    st.dataframe(collab_recs[['item', 'calories', 'protien', 'carbs', 'totalfat']])
+
+    st.subheader("Nutrient Radar Chart")
+    show_radar_chart(content_recs)
+
+    user_name = st.text_input("Enter your name for the PDF")
+
+    if st.button("Download Diet Plan as PDF"):
+        pdf_file = generate_diet_plan_pdf(user_name or "User", bmi, content_recs, collab_recs)
+        with open(pdf_file, "rb") as f:
+            st.download_button(
+                label="Click to Download PDF",
+                data=f,
+                file_name=pdf_file,
+                mime="application/octet-stream"
+            )
+
+st.sidebar.header("Recommendation History")
+for rec in st.session_state.rec_history[-5:]:
+    st.sidebar.write(f"BMI: {rec['bmi']:.1f}")
+    for meal in rec['recommendations']:
+        st.sidebar.write(f"• {meal}")
