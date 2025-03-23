@@ -289,3 +289,28 @@ h3 {
     [data-testid="stWidgetLabel"] {
         color: black !important;
     }
+
+ body {
+        background-color: #1e1e1e;
+        color: #ffffff;
+    }
+    .stButton > button {
+        background-color: #FF4B4B;
+        color: white;
+        border-radius: 8px;
+        border: none;
+        padding: 10px 20px;
+        font-weight: bold;
+    }
+    .feature-box {
+        background-color: #2c2c2c;
+        padding: 1rem;
+        border-radius: 10px;
+        margin-bottom: 1rem;
+    }
+    h1, h2, h3, h4, h5, h6 {
+        color: #FF4B4B !important;
+    }
+    .stMarkdown {
+        color: white;
+    }
