@@ -6,6 +6,8 @@ import plotly.graph_objects as go
 from fpdf import FPDF
 import io
 import random
+from streamlit_extras.switch_page_button import switch_page
+
 
 st.set_page_config(page_title="Dynamic Meal Recommender", layout="wide")
 
