@@ -5,6 +5,37 @@ import plotly.express as px
 import plotly.graph_objects as go
 from streamlit_extras.switch_page_button import switch_page
 
+
+def show_radar_chart(selected_meals):
+    categories = ['calories', 'protien', 'totalfat', 'carbs']
+    
+    fig = go.Figure()
+
+    for _, meal in selected_meals.iterrows():
+        fig.add_trace(go.Scatterpolar(
+            r=[
+                meal['calories'],
+                meal['protien'],
+                meal['totalfat'],
+                meal['carbs']
+            ],
+            theta=categories,
+            fill='toself',
+            name=meal['item']
+        ))
+
+    fig.update_layout(
+      polar=dict(
+        radialaxis=dict(visible=True)
+      ),
+      showlegend=True
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+st.subheader("Nutrient Distribution Radar Chart")
+show_radar_chart(content_recs)
+
 # Load data from Meal_Recommender.py
 if 'content_recs' not in st.session_state:
     st.session_state.content_recs = None
